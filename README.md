@@ -1,688 +1,637 @@
 # .NET Domain Architecture
 
-A reusable architecture blueprint and AI-assisted design prompt for building clean, generic, and extensible .NET applications based on Domain-Driven Design (DDD), Entity Framework Core, and a layered architecture.
+> A pragmatic reference architecture for **ASP.NET Core, Domain-Driven Design, Entity Framework Core and PostgreSQL** — with **Single-Tenancy as the simple default** and **Multi-Tenancy as an optional capability**.
 
-The repository provides a structured approach for designing:
-
-- Generic domain entities
-- Strongly typed IDs
-- Aggregate Roots and Child Entities
-- Repository abstractions
-- Reference Data and persistable enum-based entities
-- Auditing
-- Optional multi-tenancy
-- Reference-data caching
-- EF Core configurations
-- Unit of Work
-- CQRS and query handling
-- Dependency Injection
-- PlantUML architecture diagrams
-
-The architecture is designed with **Single-Tenant applications as the simple baseline**, while **Multi-Tenancy is treated as an optional capability** that can be added when required.
+[![.NET](https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
+[![ASP.NET Core](https://img.shields.io/badge/ASP.NET%20Core-10-512BD4?logo=dotnet&logoColor=white)](https://learn.microsoft.com/aspnet/core/)
+[![Entity Framework Core](https://img.shields.io/badge/EF%20Core-10-512BD4?logo=dotnet&logoColor=white)](https://learn.microsoft.com/ef/core/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![License](https://img.shields.io/badge/license-see%20LICENSE-blue.svg)](LICENSE)
 
 ---
 
-## Goals
+## Contents
 
-The goal of this project is to provide a consistent foundation for designing .NET applications where domain concepts, persistence, caching, and infrastructure concerns remain clearly separated.
-
-The architecture focuses on the following principles:
-
-- **Domain-first design**
-- **Explicit Aggregate Boundaries**
-- **Repositories at Aggregate boundaries**
-- **Child Entities without independent repositories**
-- **Strongly Typed IDs**
-- **Composition over unnecessary inheritance**
-- **Optional cross-cutting capabilities**
-- **Clear separation of Domain, Application, and Infrastructure**
-- **EF Core as a persistence implementation detail**
-- **Caching separated from persistence**
-- **Reference Data optimized for read-heavy access**
-- **Multi-Tenancy without forcing tenant awareness onto every entity**
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Core Principles](#core-principles)
+- [Optional Capabilities](#optional-capabilities)
+- [Domain Model](#domain-model)
+- [Persistence](#persistence)
+- [Reference Data](#reference-data)
+- [Caching](#caching)
+- [Multi-Tenancy](#multi-tenancy)
+- [CQRS & Queries](#cqrs--queries)
+- [Repository Structure](#repository-structure)
+- [Architecture Prompt](#architecture-prompt)
+- [Status](#status)
+- [License](#license)
 
 ---
 
-## Architecture Overview
+## Overview
 
-The conceptual architecture looks like this:
+This repository explores a **production-oriented .NET architecture** for long-lived business applications.
+
+The focus is not on collecting patterns, but on defining **clear architectural boundaries** and using abstractions only where they provide concrete value.
+
+The architecture addresses:
+
+- Domain-Driven Design
+- Clean Architecture
+- Aggregate-oriented persistence
+- Strongly Typed IDs
+- EF Core + Npgsql + PostgreSQL
+- Reference Data (fachliches Datenkonzept)
+- optional Caching
+- optional Auditing
+- optional Multi-Tenancy
+- pragmatic CQRS
+- testable persistence
+- concurrency and security
+- horizontal scaling
+
+The primary example is an **Ordering / Order domain**.
+
+---
+
+## Architecture
+
+The dependency direction is deliberately simple:
 
 ```text
-                         ┌─────────────────────┐
-                         │       Domain        │
-                         │                     │
-                         │ Entities            │
-                         │ Aggregates          │
-                         │ Value Objects       │
-                         │ Domain Rules        │
-                         └──────────┬──────────┘
-                                    │
-                                    ▼
-                         ┌─────────────────────┐
-                         │     Application     │
-                         │                     │
-                         │ Commands            │
-                         │ Queries             │
-                         │ Use Cases           │
-                         │ Repository Contracts│
-                         └──────────┬──────────┘
-                                    │
-                                    ▼
-                         ┌─────────────────────┐
-                         │   Infrastructure    │
-                         │                     │
-                         │ EF Core             │
-                         │ Repositories        │
-                         │ Database            │
-                         │ Cache               │
-                         │ Redis               │
-                         │ Interceptors        │
-                         └─────────────────────┘
+┌─────────────────────────────────────┐
+│               Domain                │
+│                                     │
+│ Entities · Aggregates · Value       │
+│ Objects · Domain Rules              │
+└──────────────────┬──────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────┐
+│            Application              │
+│                                     │
+│ Commands · Queries · Use Cases      │
+│ Repository / Domain Abstractions    │
+└──────────────────┬──────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────┐
+│          Infrastructure             │
+│                                     │
+│ EF Core · Npgsql · PostgreSQL       │
+│ Repositories · Cache · Interceptors │
+└─────────────────────────────────────┘
 ```
 
-Cross-cutting capabilities such as auditing, caching, and multi-tenancy are introduced where they are actually required instead of becoming mandatory dependencies of every entity.
+The Domain has no dependency on:
+
+```text
+EF Core
+Npgsql
+PostgreSQL
+Redis
+ASP.NET Core
+HttpContext
+IMemoryCache
+IDistributedCache
+```
+
+Infrastructure implements the abstractions required by the inner layers.
 
 ---
 
-## Single-Tenant First
+## Core Principles
 
-A central design principle is that the architecture must work naturally without Multi-Tenancy.
+### 1. Aggregates are the persistence boundary
 
-A basic application should be able to use:
+Repositories operate on **Aggregate Roots**, not on every entity.
 
 ```text
-Entity
+Order
+ ├── OrderLine
+ └── ShippingAddress
+```
+
+`OrderLine` and `ShippingAddress` therefore do not receive independent repositories.
+
+---
+
+### 2. Keep the base architecture small
+
+Not every class needs an interface.
+
+Not every database table needs a repository.
+
+Not every query needs CQRS.
+
+Not every application needs Multi-Tenancy.
+
+The architecture prefers:
+
+> **The simplest abstraction that correctly expresses the business or technical requirement.**
+
+---
+
+### 3. Strongly Typed IDs
+
+Identifiers are modeled explicitly:
+
+```csharp
+public readonly record struct OrderId(Guid Value);
+public readonly record struct OrderLineId(Guid Value);
+public readonly record struct TenantId(Guid Value);
+public readonly record struct UserId(Guid Value);
+public readonly record struct OrderStatusId(int Value);
+```
+
+This prevents accidental mixing of unrelated identifiers at compile time.
+
+---
+
+## Optional Capabilities
+
+The base architecture is independent of cross-cutting capabilities.
+
+```text
+                    BASE ARCHITECTURE
+                           │
+          ┌────────────────┼────────────────┐
+          │                │                │
+          ▼                ▼                ▼
+        Audit        Multi-Tenancy       Caching
+       optional         optional         optional
+```
+
+### Audit
+
+Auditing is preferably implemented through composition and infrastructure mechanisms such as:
+
+```text
+IAuditableEntity
+     +
+SaveChangesInterceptor
+     +
+ICurrentUser
+     +
+TimeProvider
+```
+
+No inheritance hierarchy such as `AuditableTenantAggregateRoot` is required.
+
+### Multi-Tenancy
+
+Multi-Tenancy is explicitly opt-in.
+
+Single-Tenant applications do **not** require:
+
+```text
+ITenantContext
+TenantId
+Tenant Repository
+Tenant Query Filters
+Tenant Resolution
+Tenant-aware Cache Keys
+```
+
+unless the application actually needs them.
+
+### Caching
+
+Caching is a performance layer:
+
+```text
+PostgreSQL
+    =
+Source of Truth
+
+Memory / Redis
+    =
+Performance Layer
+```
+
+Caching must never become the authoritative persistence mechanism.
+
+---
+
+## Domain Model
+
+The primary example is the Ordering domain:
+
+```text
+Order
+ ├── OrderLine
+ └── ShippingAddress
+```
+
+with Strongly Typed IDs:
+
+```text
+OrderId
+OrderLineId
+TenantId
+UserId
+OrderStatusId
+```
+
+The model demonstrates:
+
+- Aggregate Root boundaries
+- Child Entity lifecycle
+- encapsulation of collections
+- Value Objects
+- optional tenant awareness
+- optional auditing
+- domain identity
+- persistence mapping
+
+Preferred aggregate interaction:
+
+```csharp
+order.AddLine(...);
+order.RemoveLine(...);
+order.ChangeShippingAddress(...);
+```
+
+rather than exposing mutable child collections.
+
+---
+
+## Persistence
+
+**PostgreSQL is the concrete persistence provider and system of record.**
+
+```text
+Domain
    │
    ▼
-Aggregate Root
+Application
    │
    ▼
-Repository
+Repository / Query
    │
    ▼
 EF Core
    │
    ▼
-Database
+Npgsql
+   │
+   ▼
+PostgreSQL
 ```
 
-without requiring:
+The architecture explicitly evaluates PostgreSQL-specific capabilities such as:
 
-```text
-TenantId
-ITenantContext
-ITenantEntity
-TenantRepository
-Tenant Query Filters
-Tenant-aware Cache Keys
-```
+- `uuid`
+- `integer` / `bigint`
+- foreign keys
+- unique constraints
+- indexes and partial indexes
+- `jsonb`
+- transactions
+- optimistic concurrency
+- Row-Level Security
+- migrations and seed data
 
-Multi-Tenancy can then be introduced as an additional capability:
-
-```text
-                         Entity
-                            │
-                    ┌───────┴───────┐
-                    │               │
-                 Aggregate        optional
-                    │             capabilities
-                    │          ┌────┼────┐
-                    │          │    │    │
-                    ▼        Audit Tenant Cache
-                Repository
-                    │
-                    ▼
-                  EF Core
-                    │
-                    ▼
-                 Database
-```
-
-This keeps the core domain model simple while allowing the same architecture to support multi-tenant applications.
+Provider-specific features are used only where they provide a concrete benefit.
 
 ---
 
-## Aggregate Boundaries
+## Reference Data (fachliches Datenkonzept)
 
-Aggregates define consistency and persistence boundaries.
+Reference Data is treated separately from normal Aggregate persistence.
 
-For example:
-
-```text
-Order
- ├── OrderLine
- ├── OrderLine
- └── ShippingAddress
-```
-
-`Order` is the Aggregate Root.
-
-`OrderLine` and `ShippingAddress` belong to the aggregate and therefore do not require their own repositories.
-
-The intended access pattern is:
+The architecture distinguishes between:
 
 ```text
-IOrderRepository
-       │
-       ▼
-     Order
-       │
-       ├── OrderLine
-       ├── OrderLine
-       └── ShippingAddress
+Domain Aggregate
+        │
+        └── normal lifecycle
+
+Reference / Lookup Data
+        │
+        └── controlled lifecycle
+
+Code-defined Enum Entity
+        │
+        └── stable identity + seed data
 ```
 
-rather than:
-
-```text
-IOrderRepository
-IOrderLineRepository
-IShippingAddressRepository
-```
-
-This makes the Aggregate Root the primary entry point for modifying its internal state and enforcing domain invariants.
-
----
-
-## Strongly Typed IDs
-
-The architecture favors strongly typed identifiers over primitive IDs.
-
-For example:
-
-```csharp
-public readonly record struct OrderId(Guid Value);
-
-public readonly record struct OrderLineId(Guid Value);
-
-public readonly record struct TenantId(Guid Value);
-
-public readonly record struct UserId(Guid Value);
-```
-
-This prevents accidental mixing of identifiers:
-
-```csharp
-void ProcessOrder(OrderId orderId)
-{
-}
-```
-
-A `CustomerId` cannot accidentally be passed where an `OrderId` is expected.
-
-Strongly typed IDs are integrated with the generic entity model and EF Core persistence.
-
----
-
-## Reference Data and Enum Entities
-
-This architecture distinguishes between ordinary Lookup Entities and **persistable enum-based reference data**.
-
-A persistable enum entity derives its identity from a C# enum:
-
-```csharp
-public enum OrderStatus
-{
-    Pending = 1,
-    Confirmed = 2,
-    Shipped = 3,
-    Cancelled = 4
-}
-```
-
-The numeric value becomes the database identity:
+Example:
 
 ```text
 OrderStatus
-┌────┬───────────┬─────────┬────────────────────┐
-│ Id │ Name      │ IsFinal │ Additional Metadata│
-├────┼───────────┼─────────┼────────────────────┤
-│ 1  │ Pending   │ false   │ ...                │
-│ 2  │ Confirmed │ false   │ ...                │
-│ 3  │ Shipped   │ true    │ ...                │
-│ 4  │ Cancelled │ true    │ ...                │
-└────┴───────────┴─────────┴────────────────────┘
+┌────┬───────────┬─────────┐
+│ Id │ Name      │ IsFinal │
+├────┼───────────┼─────────┤
+│ 1  │ Pending   │ false   │
+│ 2  │ Confirmed │ false   │
+│ 3  │ Shipped   │ true    │
+│ 4  │ Cancelled │ true    │
+└────┴───────────┴─────────┘
 ```
 
-This allows additional domain-specific metadata to be persisted alongside the enum value.
+Code-defined values are synchronized with PostgreSQL through controlled seed/migration mechanisms.
 
-Examples include:
-
-- `IsFinal`
-- `AllowsModification`
-- `SortOrder`
-- `RequiresApproval`
-- `IsActive`
-
-These entities are treated as **reference data**, not as normal CRUD entities.
+A persisted enum value must keep its stable identity once released.
 
 ---
 
-## Reference Data Caching
+## Caching
 
-Reference data is generally read much more frequently than it changes.
+Reference Data is a natural candidate for caching because it is typically:
 
-Therefore, the architecture uses a cache-aside approach:
+- read frequently
+- relatively small
+- stable
+- changed in a controlled manner
 
-```text
-First request
-
-Application
-    │
-    ▼
-  Cache
-    │
-   Miss
-    │
-    ▼
-Database
-    │
-    ▼
-  Cache
-    │
-    ▼
-Response
-```
-
-Subsequent requests:
+The preferred conceptual model is cache-aside:
 
 ```text
 Application
-    │
-    ▼
-  Cache
-    │
-   Hit
-    │
-    ▼
-Response
+     │
+     ▼
+   Cache
+   ┌─┴─┐
+  Hit Miss
+   │    │
+   │    ▼
+   │ Repository
+   │    │
+   │    ▼
+   │ PostgreSQL
+   │    │
+   └────┘
 ```
 
-The implementation should also prevent multiple concurrent requests from causing the same database query during a cache miss.
-
-For example:
+Concurrent cache misses are coordinated so that:
 
 ```text
 5 concurrent requests
         │
         ▼
-   Cache Miss
+1 database query
         │
         ▼
-  1 Database Query
-        │
-        ▼
-      Cache
-        │
-   ┌────┼────┬────┬────┐
-   ▼    ▼    ▼    ▼    ▼
-   A    B    C    D    E
+5 results
 ```
 
-The cache itself remains an infrastructure concern and is deliberately separated from the repository/persistence abstraction.
-
----
-
-## Repository Architecture
-
-Repositories operate primarily at Aggregate boundaries.
-
-A conceptual structure is:
-
-```text
-IRepository<TAggregate, TKey>
-            │
-            ├── IOrderRepository
-            │
-            └── OrderRepository
-```
-
-Reference data follows a different access pattern:
-
-```text
-IReferenceDataRepository<T, TKey>
-            │
-            ▼
-       EF Core
-```
-
-with caching placed in front of it:
-
-```text
-Application
-     │
-     ▼
-ReferenceDataService
-     │
-     ▼
-ReferenceDataCache
-     │
-   Hit/Miss
-     │
-     ▼
-ReferenceDataRepository
-     │
-     ▼
-   EF Core
-     │
-     ▼
-  Database
-```
-
-The project deliberately evaluates whether concepts such as `CacheRepository` or `TenantRepository` are actually repositories or whether they are better modeled as services, contexts, decorators, or infrastructure components.
-
----
-
-## Auditing
-
-Auditing is treated as an optional capability.
-
-Typical audit information includes:
-
-```text
-CreatedAt
-CreatedBy
-ModifiedAt
-ModifiedBy
-```
-
-Rather than creating a large inheritance hierarchy such as:
-
-```text
-AuditableEntity
-TenantEntity
-AuditableTenantEntity
-AuditableAggregateRoot
-TenantAggregateRoot
-...
-```
-
-the architecture favors interfaces and infrastructure mechanisms where appropriate.
-
-Audit values can be populated automatically during persistence, for example through an EF Core `SaveChangesInterceptor`.
+For multiple application instances, Redis can provide a shared distributed cache.
 
 ---
 
 ## Multi-Tenancy
 
-Multi-Tenancy is an optional capability.
+Multi-Tenancy extends the base architecture:
 
-A tenant-aware entity may implement:
+```text
+Single-Tenant
 
-```csharp
-public interface ITenantEntity<TTenantKey>
-    where TTenantKey : struct
-{
-    TTenantKey TenantId { get; }
-}
+Domain
+  │
+  ▼
+Aggregate
+  │
+  ▼
+Repository
+  │
+  ▼
+PostgreSQL
 ```
 
-while a normal single-tenant entity does not need to know anything about tenants.
+versus:
 
-For multi-tenant applications, the architecture considers:
+```text
+Multi-Tenant
 
-- Tenant resolution
-- `ITenantContext`
-- Tenant-aware repositories
-- EF Core global query filters
-- Tenant isolation
-- Database constraints
-- Composite keys
-- Tenant-aware cache keys
-- Optional database Row-Level Security
+Request
+  │
+  ▼
+Tenant Resolution
+  │
+  ▼
+Tenant Context
+  │
+  ▼
+Application
+  │
+  ▼
+Repository / EF Core
+  │
+  ▼
+Tenant Isolation
+  │
+  ▼
+PostgreSQL
+```
 
-The important distinction is:
+The architecture separates:
 
 ```text
 Tenant Resolution
-       ≠
+Tenant Context
 Tenant Filtering
-       ≠
 Tenant Authorization
-       ≠
-Tenant Data Isolation
+Tenant Isolation
 ```
 
-These concerns should not automatically be collapsed into a single abstraction.
+Tenant isolation is treated as a **security requirement**.
+
+Defense-in-depth can combine:
+
+```text
+Application Authorization
+        ↓
+EF Core Filtering
+        ↓
+Database Constraints
+        ↓
+PostgreSQL Row-Level Security
+```
+
+The final architecture determines which layers are appropriate for the deployment scenario.
 
 ---
 
-## EF Core
+## CQRS & Queries
 
-EF Core is treated as part of the Infrastructure/Persistence layer.
+CQRS is applied pragmatically.
 
-Entity configuration follows a generic configuration hierarchy where appropriate:
-
-```text
-EntityConfiguration<T, TKey>
-        │
-        ├── Aggregate Configuration
-        ├── Child Entity Configuration
-        ├── Enum Entity Configuration
-        ├── optional Tenant Configuration
-        └── optional Audit Configuration
-```
-
-The goal is to reuse common configuration logic without creating a combinatorial explosion of specialized configuration classes.
-
-For example:
+Commands typically operate through aggregates:
 
 ```text
-Entity
-Aggregate Root
-Aggregate Root + Audit
-Aggregate Root + Tenant
-Aggregate Root + Tenant + Audit
+Command
+   │
+   ▼
+Aggregate Repository
+   │
+   ▼
+Aggregate
+   │
+   ▼
+EF Core
 ```
 
-should not necessarily result in four separate configuration inheritance branches.
-
----
-
-## Example Domain
-
-The example domain used throughout the architecture is an Order aggregate:
+Queries may use dedicated read models:
 
 ```text
-Order
- ├── OrderLine
- └── ShippingAddress
+Query
+   │
+   ▼
+Query Handler
+   │
+   ├── EF Core
+   └── Dapper
+   │
+   ▼
+DTO / Projection
 ```
 
-with reference data such as:
+Not every read needs to pass through an Aggregate Repository.
 
-```text
-OrderStatus
-PaymentType
-Country
-```
-
-This domain demonstrates:
-
-- Aggregate boundaries
-- Child entities
-- Strongly typed IDs
-- Reference data
-- Persistable enum entities
-- Repository access
-- Caching
-- Auditing
-- Optional Multi-Tenancy
-- EF Core configuration
+Complex projections, reporting and read-heavy scenarios may justify dedicated query infrastructure.
 
 ---
 
 ## Repository Structure
 
-The repository is organized as follows:
+The repository intentionally avoids a universal hierarchy such as:
 
 ```text
-dotnet-domain-architecture/
-│
+IRepository
+ ├── ICacheRepository
+ ├── ITenantRepository
+ ├── IAuditRepository
+ ├── IEnumRepository
+ └── IChildEntityRepository
+```
+
+Instead, responsibilities remain separate:
+
+```text
+Aggregate Persistence
+        │
+        ▼
+Aggregate Repository
+
+Reference Data
+        │
+        ▼
+Reference Data Access
+
+Tenant Resolution
+        │
+        ▼
+Tenant Context
+
+Auditing
+        │
+        ▼
+EF Core Interceptor
+
+Caching
+        │
+        ▼
+Cache Infrastructure
+```
+
+This distinction is important:
+
+> **A cache is not automatically a repository, and a context or interceptor is not a repository.**
+
+---
+
+## Repository Structure
+
+```text
+.
+├── LICENSE
 ├── README.md
 │
-├── prompts/
-│   └── architecture-design.md
-│
-├── diagrams/
-│   ├── entity-model.puml
-│   ├── aggregate.puml
-│   ├── repositories.puml
-│   ├── caching.puml
-│   └── tenancy.puml
-│
-├── examples/
-│   ├── domain/
-│   ├── application/
-│   └── infrastructure/
-│
-└── docs/
-    ├── architecture.md
-    ├── aggregates.md
-    ├── repositories.md
-    ├── reference-data.md
-    ├── caching.md
-    └── multi-tenancy.md
+└── prompts
+    └── postgres
+        └── 05-architecture-design-postgres.md
 ```
 
-The exact structure may evolve as the architecture develops.  
-
-The architectural decisions resulting from the prompt:
-```text
-prompts/architecture-design.md
-```
-are located in `docs/`.
+The repository is intentionally structured so that the **architecture prompt** can evolve independently from the eventual reference implementation.
 
 ---
 
-## AI Architecture Prompt
+## Architecture Prompt
 
-The primary purpose of the `prompts/` directory is to provide a reusable prompt for AI-assisted architecture design.
+The detailed architecture specification is maintained in:
 
-The prompt asks an AI model to:
+**[`prompts/postgres/05-architecture-design-postgres.md`](prompts/postgres/05-architecture-design-postgres.md)**
 
-1. Analyze the domain model.
-2. Design generic entities and interfaces.
-3. Define Aggregate boundaries.
-4. Design repository abstractions.
-5. Design optional Audit and Multi-Tenancy capabilities.
-6. Design persistable enum/reference data.
-7. Design reference-data caching.
-8. Design EF Core configurations.
-9. Produce production-oriented C# code.
-10. Produce PlantUML diagrams.
-11. Explain important architectural decisions.
-12. Compare alternatives and explicitly justify the final recommendation.
+The prompt covers:
 
-The prompt is intentionally detailed so that architectural decisions are not made in isolation.
+- architecture and layer boundaries
+- Entity and Aggregate design
+- Strongly Typed IDs
+- Entity Equality
+- Child Entities
+- optional Multi-Tenancy
+- tenant isolation and PostgreSQL RLS
+- auditing
+- Reference Data and Enum Entities
+- repositories
+- caching and cache stampede protection
+- Redis and multi-instance deployments
+- EF Core configuration
+- PostgreSQL / Npgsql
+- concurrency
+- CQRS
+- Specification Pattern
+- Unit of Work
+- dependency injection
+- testing
+- security
+- PlantUML architecture diagrams
+- final decision matrices
 
----
-
-## Design Principles
-
-The architecture follows these general principles:
-
-### 1. Aggregates define repository boundaries
-
-Repositories should normally operate on Aggregate Roots rather than individual child entities.
-
-### 2. Domain should not depend on infrastructure
-
-The domain model should not depend directly on:
-
-- EF Core
-- Redis
-- SQL
-- HTTP
-- ASP.NET Core
-- infrastructure-specific caching implementations
-
-### 3. Capabilities should remain optional
-
-Audit, Multi-Tenancy, and caching should only introduce dependencies where they are actually required.
-
-### 4. Persistence should not dictate the domain model
-
-EF Core configuration should adapt the persistence model to the domain rather than forcing infrastructure concerns into domain abstractions.
-
-### 5. Reference data is different from normal CRUD data
-
-Reference data often has different lifecycle, caching, seeding, and modification requirements.
-
-### 6. Caching is not persistence
-
-A cache is an optimization and must not become the authoritative source of domain state.
-
-### 7. Prefer explicit boundaries over generic abstractions everywhere
-
-Generic abstractions should provide real value. A generic repository, cache repository, or tenant repository should not exist merely because it can be made generic.
+The README intentionally remains concise; the prompt contains the detailed architectural analysis and implementation requirements.
 
 ---
 
 ## Status
 
-This repository is intended as an evolving architecture blueprint rather than a framework or NuGet package.
+🚧 **Architecture / Reference Project**
 
-The examples and recommendations may change as different architectural alternatives are evaluated.
+The repository is evolving from the architecture specification toward a concrete reference implementation.
 
-The primary goals are:
+Architectural decisions should be:
 
-- clarity
-- consistency
-- type safety
-- maintainability
-- testability
-- scalability
-- explicit architectural boundaries
+1. explicit,
+2. justified,
+3. documented,
+4. validated through tests,
+5. changed deliberately.
+
+The project does not aim to provide a universal architecture for every .NET application.
 
 ---
 
-## Use of the prompt
+## License
 
+This project is licensed under the terms defined in [`LICENSE`](LICENSE).
 
+---
 
-### Use a two-stage approach
+## Guiding Principle
 
+> **Keep the core architecture simple. Add complexity only when the business or technical requirements justify it.**
+
+In particular:
 
 ```text
-┌─────────────────────────────┐
-│ 1. PLAN                     │
-│                             │
-│ Analyze requirements        │
-│ Design the architecture     │
-│ Evaluate alternatives       │
-│ Define architectural        │
-│ decisions                   │
-└──────────────┬──────────────┘
-               │
-               ▼
-┌─────────────────────────────┐
-│ 2. AGENT                    │
-│                             │
-│ Implement C#                │
-│ Implement EF Core           │
-│ Implement repositories      │
-│ Implement caching           │
-│ Create PlantUML diagrams    │
-│ Create tests                │
-│ Create documentation        │
-└─────────────────────────────┘
+                    BASE ARCHITECTURE
+                           │
+          ┌────────────────┼────────────────┐
+          │                │                │
+          ▼                ▼                ▼
+        Audit        Multi-Tenancy       Caching
+       optional         optional         optional
 ```
 
-**Plan** is therefore an excellent choice for the first iteration, while you are still discussing and refining the architecture.
-
-Once you say:
-
-> "The architecture looks good as it is. Implement it."
-
-→ **Agent**.
-
-I would primarily use **Ask** for subsequent, more detailed questions, for example:
-
-> "Why is `IReferenceDataCache<T,TKey>` better than `ICacheRepository<T,TKey>`?"
-
-or:
-
-> "Should `TenantId` be part of the primary key?"
-
-**Plan → Review → Agent** is, in my opinion, the best workflow.
+**Single-Tenancy remains the simple default. Multi-Tenancy, Auditing and Caching are capabilities — not prerequisites for the domain model.**
